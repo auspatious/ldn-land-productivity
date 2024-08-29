@@ -1,78 +1,10 @@
 {
-    "type": "FeatureCollection",
-    "name": "aois",
-    "crs": {
-        "type": "name",
-        "properties": {
-            "name": "urn:ogc:def:crs:OGC:1.3:CRS84"
-        }
-    },
-    "features": [
-        {
-            "type": "Feature",
-            "properties": {
-                "name": "Fiji"
-            },
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [
-                    [
-                        [
-                            176.778538,
-                            -16.058171
-                        ],
-                        [
-                            180.332696,
-                            -15.961103
-                        ],
-                        [
-                            180.332696,
-                            -19.545128
-                        ],
-                        [
-                            176.830805,
-                            -19.612328
-                        ],
-                        [
-                            176.778538,
-                            -16.058171
-                        ]
-                    ]
-                ]
-            }
-        },
-        {
-            "type": "Feature",
-            "properties": {
-                "name": "Eastern Caribbean"
-            },
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [
-                    [
-                        [
-                            -62.384008,
-                            14.211939
-                        ],
-                        [
-                            -62.354776,
-                            9.431664
-                        ],
-                        [
-                            -59.245977,
-                            9.465337
-                        ],
-                        [
-                            -59.219607,
-                            14.238309
-                        ],
-                        [
-                            -62.384008,
-                            14.211939
-                        ]
-                    ]
-                ]
-            }
-        }
-    ]
+"type": "FeatureCollection",
+"name": "aois",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "name": "Fiji" }, "geometry": { "type": "Polygon", "coordinates": [ [ [ 176.778538, -16.058171 ], [ 180.332696, -15.961103 ], [ 180.332696, -19.545128 ], [ 176.830805, -19.612328 ], [ 176.778538, -16.058171 ] ] ] } },
+{ "type": "Feature", "properties": { "name": "Eastern Caribbean" }, "geometry": { "type": "Polygon", "coordinates": [ [ [ -62.384008, 14.211939 ], [ -62.354776, 9.431664 ], [ -59.245977, 9.465337 ], [ -59.219607, 14.238309 ], [ -62.384008, 14.211939 ] ] ] } },
+{ "type": "Feature", "properties": { "name": "Belize" }, "geometry": { "type": "Polygon", "coordinates": [ [ [ -89.268183165914593, 18.6116798437086 ], [ -87.227670191054642, 18.372033384350004 ], [ -87.311991951343998, 15.918840026097712 ], [ -89.332284187062101, 15.87921844517416 ], [ -89.268183165914593, 18.6116798437086 ] ] ] } }
+]
 }
