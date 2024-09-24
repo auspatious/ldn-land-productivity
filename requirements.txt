@@ -1,0 +1,12 @@
+bokeh
+boto3
+bottleneck
+dask
+distributed
+jinja2
+odc-geo
+odc-stac
+pystac
+pystac_client
+rio-stac
+scipy

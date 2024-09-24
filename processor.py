@@ -6,10 +6,12 @@ import numpy as np
 from pystac_client import Client
 from pystac import ItemCollection, Asset, Item
 from odc.stac import load, configure_s3_access
+from odc.geo.cog import to_cog
 from dask.distributed import Client as DaskClient
 from xarray import Dataset
 
 import boto3
+from botocore.client import BaseClient
 
 from rio_stac import create_stac_item
 
@@ -25,12 +27,11 @@ from utils import (
 
 from odc.geo.geobox import GeoBox
 
-from logging import getLogger
+from logging import getLogger, StreamHandler, Formatter, Logger, INFO
 
 
 class LDNPRocessor:
-    log = getLogger("LDN")
-    log.setLevel("INFO")
+    log = None
 
     tile: Iterable = None
     geobox: GeoBox = None
@@ -41,6 +42,7 @@ class LDNPRocessor:
     items: ItemCollection = None
     data: Dataset = None
     results: Dataset = None
+    results_cached: bool = False
 
     collection: str = "geo-ls-lp"
     item: Item = None
@@ -52,7 +54,14 @@ class LDNPRocessor:
     }
 
     def __init__(
-        self, tile: Iterable, year: int, bucket: str, path: str, dask_config: dict = None, *args, **kwargs
+        self,
+        tile: Iterable,
+        year: int,
+        bucket: str,
+        path: str,
+        dask_config: dict = None,
+        *args,
+        **kwargs,
     ):
         self.tile = tile
         self.geobox = WGS84GRID30.tile_geobox(tile)
@@ -64,7 +73,25 @@ class LDNPRocessor:
         if dask_config is not None:
             self.dask_config = dask_config
 
+        self._setup_logger()
         configure_s3_access(cloud_defaults=True, requester_pays=True)
+
+    def _setup_logger(self) -> Logger:
+        """Set up a simple logger"""
+        console = StreamHandler()
+        time_format = "%Y-%m-%d %H:%M:%S"
+        console.setFormatter(
+            Formatter(
+                fmt=f"%(asctime)s %(levelname)s ({self.tile[0]}_{self.tile[1]}): %(message)s",
+                datefmt=time_format,
+            )
+        )
+
+        log = getLogger("GEOMAD")
+        log.addHandler(console)
+        log.setLevel(INFO)
+    
+        self.log = log
 
     @property
     def tile_id(self):
@@ -73,10 +100,26 @@ class LDNPRocessor:
     def s3_path(self, var: str | None, ext: str = "tif"):
         name = self.tile_id if var is None else f"{self.tile_id}_{var}"
         file_path = (
-            f"{self.path}/{self.year}/{self.tile[0]}/{self.tile[1]}/" f"{name}.{ext}"
+            f"s3://{self.bucket}/{self.path}/{self.year}/{self.tile[0]:03}/{self.tile[1]:03}/"
+            f"{name}.{ext}"
         )
 
         return file_path
+
+    def s3_dump(
+        self,
+        data: bytes,
+        filepath: str,
+        client: BaseClient,
+        content_type="application/octet-stream",
+    ):
+        key = filepath.lstrip("s3://{self.bucket}/")
+
+        r = client.put_object(
+            Bucket=self.bucket, Key=key, Body=data, ContentType=content_type
+        )
+        code = r["ResponseMetadata"]["HTTPStatusCode"]
+        return 200 <= code < 300
 
     def get_stac_item(self):
         assets = {
@@ -135,13 +178,13 @@ class LDNPRocessor:
 
         self.data = data
 
-    def transform(self):
+    def transform(self, cache=False):
         if self.data is None:
             self.log.error("No data to transform")
 
         masked = mask_usgs_landsat(self.data)
         indices = create_land_productivity_indices(masked, drop=True)
-        monthly = indices.resample(time="1M").median()
+        monthly = indices.resample(time="1ME").median()
 
         # Todo: see if this can be done with more fancy interpolation
         filled = monthly.bfill("time").ffill("time")
@@ -152,6 +195,10 @@ class LDNPRocessor:
             time=slice(f"{self.year}-01-01", f"{self.year}-12-31")
         )
         integral = interpolated.integrate("time", datetime_unit="D")
+
+        if cache:
+            with DaskClient(**self.dask_config):
+                integral = integral.compute()
 
         # Todo: consider adding other statistics, like median or max
 
@@ -165,15 +212,31 @@ class LDNPRocessor:
         if self.results is None:
             self.log.error("No results to save")
 
+        # Set up our client
+        s3 = boto3.client("s3")
+
         written = []
 
-        # Write files to S3 as cloud optimised GeoTIFFs
-        with DaskClient(**self.dask_config):
+        def _process():
+            # Write files to S3 as cloud optimised GeoTIFFs
             for var in self.results.data_vars:
                 out_path = self.s3_path(var)
                 self.log.info(f"Writing {var} to {out_path}")
-                self.results[var].odc.write_cog(out_path, nodata=np.nan)
-                written.append(var, out_path)
+
+                # Get and write the cog
+                binary_cog = to_cog(self.results[var], nodata=np.nan)
+                self.s3_dump(binary_cog, out_path, s3, content_type="image/tiff")
+
+                # Keep notes
+                written.append((var, out_path))
+
+                self.log.info(f"Wrote {var}...")
+
+        if not self.cached:
+            with DaskClient(**self.dask_config):
+                _process()
+        else:
+            _process()
 
         # Create a STAC document
         stac_path = self.s3_path(None, "stac-item.json")
@@ -182,14 +245,9 @@ class LDNPRocessor:
 
         self.item = item
 
+        # Write the STAC document
         self.log.info(f"Writing STAC item to {stac_path}")
         stac_item_json = json.dumps(item.to_dict(), indent=4)
-        s3 = boto3.client("s3")
-        s3.put_object(
-            Bucket=self.bucket,
-            Key=stac_path,
-            Body=stac_item_json,
-            ContentType="application/json",
-        )
+        self.s3_dump(stac_item_json, stac_path, s3, content_type="application/json")
 
         self.log.info(f"Saved {len(written)} files and STAC item")
