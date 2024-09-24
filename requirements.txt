@@ -3,7 +3,9 @@ boto3
 bottleneck
 dask
 distributed
+folium
 jinja2
+matplotlib
 odc-geo
 odc-stac
 pystac

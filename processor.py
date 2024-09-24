@@ -10,6 +10,8 @@ from odc.geo.cog import to_cog
 from dask.distributed import Client as DaskClient
 from xarray import Dataset
 
+from datetime import datetime, timezone
+
 import boto3
 from botocore.client import BaseClient
 
@@ -32,20 +34,22 @@ from logging import getLogger, StreamHandler, Formatter, Logger, INFO
 
 class LDNPRocessor:
     log = None
+    overwrite: bool = False
 
     tile: Iterable = None
     geobox: GeoBox = None
     year: int = None
     bucket: str = None
-    path: str = None
+    bucket_path: str = None
 
     items: ItemCollection = None
     data: Dataset = None
     results: Dataset = None
-    results_cached: bool = False
+    cached: bool = False
 
     collection: str = "geo-ls-lp"
     item: Item = None
+    version: str = None
 
     dask_config = {
         "n_workers": 4,
@@ -58,8 +62,10 @@ class LDNPRocessor:
         tile: Iterable,
         year: int,
         bucket: str,
-        path: str,
+        bucket_path: str,
         dask_config: dict = None,
+        overwrite: bool = False,
+        version: str = "0.0.0",
         *args,
         **kwargs,
     ):
@@ -68,10 +74,13 @@ class LDNPRocessor:
         self.tile = tile
         self.year = year
         self.bucket = bucket
-        self.path = path
+        self.bucket_path = bucket_path
+        self.version = version
 
         if dask_config is not None:
             self.dask_config = dask_config
+
+        self.overwrite = overwrite
 
         self._setup_logger()
         configure_s3_access(cloud_defaults=True, requester_pays=True)
@@ -90,52 +99,60 @@ class LDNPRocessor:
         log = getLogger("GEOMAD")
         log.addHandler(console)
         log.setLevel(INFO)
-    
+
         self.log = log
 
     @property
     def tile_id(self):
-        return f"{self.collection}_{self.year}_{self.tile[0]}_{self.tile[1]}"
+        return f"{self.collection}_{self.year}_{self.tile[0]:03}_{self.tile[1]:03}"
 
-    def s3_path(self, var: str | None, ext: str = "tif"):
-        name = self.tile_id if var is None else f"{self.tile_id}_{var}"
-        file_path = (
-            f"s3://{self.bucket}/{self.path}/{self.year}/{self.tile[0]:03}/{self.tile[1]:03}/"
-            f"{name}.{ext}"
+    @property
+    def path(self):
+        out_path = (
+            f"{self.bucket_path}/"
+            f"{self.collection.replace('-', '_')}/"
+            f"{self.version.replace('.', '_')}/"
+            f"{self.year}/{self.tile[0]:03}/{self.tile[1]:03}"
         )
+        return out_path
 
-        return file_path
+    def key(self, var: str | None, ext: str = "tif"):
+        name = self.tile_id if var is None else f"{self.tile_id}_{var}"
+        return f"{self.path}/{name}.{ext}"
 
     def s3_dump(
         self,
         data: bytes,
-        filepath: str,
+        key: str,
         client: BaseClient,
         content_type="application/octet-stream",
     ):
-        key = filepath.lstrip("s3://{self.bucket}/")
-
         r = client.put_object(
             Bucket=self.bucket, Key=key, Body=data, ContentType=content_type
         )
         code = r["ResponseMetadata"]["HTTPStatusCode"]
-        return 200 <= code < 300
+        assert 200 <= code < 300
+
+        return f"s3://{self.bucket}/{key}"
 
     def get_stac_item(self):
         assets = {
             var: Asset(
                 media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-                href=self.s3_path(var),
+                href=f"https://{self.bucket}/{self.key(var)}",
                 roles=["data"],
             )
-            for var in self.results.datavars
+            for var in self.results.data_vars
         }
 
+        # Get the first asset href
+        href = list(assets.values())[0].href
+
         return create_stac_item(
-            assets.values()[0].href,
+            href,
             id=self.tile_id,
             collection=self.collection,
-            input_datetime=f"{self.year}-01-01T00:00:00Z",
+            input_datetime=datetime(self.year, 1, 1, tzinfo=timezone.utc),
             assets=assets,
             with_proj=True,
             with_raster=True,
@@ -215,22 +232,38 @@ class LDNPRocessor:
         # Set up our client
         s3 = boto3.client("s3")
 
+        # Check if we're already done
+        stac_key = self.key(None, "stac-item.json")
+        if not self.overwrite:
+            try:
+                s3.head_object(Bucket=self.bucket, Key=stac_key)
+                self.log.info(f"Skipping {stac_key} as it already exists")
+                return
+            except s3.exceptions.ClientError as e:
+                self.log.exception(e)
+
         written = []
 
         def _process():
             # Write files to S3 as cloud optimised GeoTIFFs
             for var in self.results.data_vars:
-                out_path = self.s3_path(var)
-                self.log.info(f"Writing {var} to {out_path}")
-
+                if not self.overwrite:
+                    try:
+                        s3.head_object(Bucket=self.bucket, Key=self.key(var, "tif"))
+                        self.log.info(f"Skipping {var} as it already exists")
+                        continue
+                    except s3.exceptions.ClientError as e:
+                        self.log.exception(e)
                 # Get and write the cog
                 binary_cog = to_cog(self.results[var], nodata=np.nan)
-                self.s3_dump(binary_cog, out_path, s3, content_type="image/tiff")
+                out_path = self.s3_dump(
+                    binary_cog, self.key(var, "tif"), s3, content_type="image/tiff"
+                )
 
                 # Keep notes
                 written.append((var, out_path))
 
-                self.log.info(f"Wrote {var}...")
+                self.log.info(f"Finished writing {var} to {out_path}")
 
         if not self.cached:
             with DaskClient(**self.dask_config):
@@ -239,15 +272,15 @@ class LDNPRocessor:
             _process()
 
         # Create a STAC document
-        stac_path = self.s3_path(None, "stac-item.json")
         item = self.get_stac_item()
-        item.set_self_href(stac_path)
+        item.set_self_href(f"https://{self.bucket}/{stac_key}")
 
         self.item = item
 
         # Write the STAC document
-        self.log.info(f"Writing STAC item to {stac_path}")
         stac_item_json = json.dumps(item.to_dict(), indent=4)
-        self.s3_dump(stac_item_json, stac_path, s3, content_type="application/json")
+        self.s3_dump(
+            stac_item_json, stac_key, s3, content_type="application/json"
+        )
 
-        self.log.info(f"Saved {len(written)} files and STAC item")
+        self.log.info(f"Saved {len(written)} files and STAC item to https://{self.bucket}/{stac_key}")
