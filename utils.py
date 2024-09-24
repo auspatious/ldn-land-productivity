@@ -1,3 +1,5 @@
+import numpy as np
+from xarray import Dataset
 from odc.geo.gridspec import GridSpec
 
 WGS84GRID10 = GridSpec("EPSG:4326", tile_shape=(15000, 15000), resolution=0.0001)
@@ -6,6 +8,7 @@ WGS84GRID30 = GridSpec("EPSG:4326", tile_shape=(5000, 5000), resolution=0.0003)
 USGSCATALOG = "https://landsatlook.usgs.gov/stac-server/"
 USGSLANDSAT = "landsat-c2l2-sr"
 
+
 def http_to_s3_url(http_url):
     """Convert a USGS HTTP URL to an S3 URL"""
     s3_url = http_url.replace(
@@ -13,3 +16,46 @@ def http_to_s3_url(http_url):
     ).rstrip(":1")
     return s3_url
 
+
+def mask_usgs_landsat(data: Dataset) -> Dataset:
+    """Create cloud mask, scale values to 0-1 and set nodata to NaN"""
+    # Bits 3 and 4 are cloud shadow and cloud, respectively.
+    bitflags = 0b00011000
+
+    # Bitwise AND to select any pixel that is cloud shadow or cloud or nodata
+    cloud_mask = (data.qa_pixel & bitflags) != 0
+    # Note that it might be a good idea to dilate the mask here to catch any pixels that are adjacent to clouds
+
+    # Pick out nodata too
+    nodata_mask = data.qa_pixel == 0
+
+    # Combined the masks
+    mask = cloud_mask | nodata_mask
+
+    # Mask the original data
+    masked = data.where(~mask, other=np.nan).drop_vars("qa_pixel")
+
+    # Scale the data to 0-1
+    scaled = (masked.where(masked != 0) * 0.0000275 + -0.2).clip(0, 1)
+
+    return scaled
+
+
+def create_land_productivity_indices(data: Dataset, drop: bool = True) -> Dataset:
+    """Create NDVI, MSAVI and EVI2 indices"""
+
+    # NDVI
+    data["ndvi"] = (data["nir"] - data["red"]) / (data["nir"] + data["red"])
+
+    # MSAVI
+    data["msavi"] = 0.5 * (
+        (2 * data["nir"] + 1) - np.sqrt((2 * data["nir"] + 1) ** 2 - 8 * (data["nir"] - data["red"]))
+    )
+
+    # EVI2
+    data["evi2"] = 2.5 * (data["nir"] - data["red"]) / (data["nir"] + 2.4 * data["red"] + 1)
+
+    if drop:
+        data = data.drop_vars(["red", "nir"])
+
+    return data
