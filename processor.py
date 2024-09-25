@@ -51,13 +51,16 @@ class LDNPRocessor:
         "memory_limit": "16GB",
     }
 
+    dask_chunks = {"x": 2501, "y": 2501, "time": 1}
+
     def __init__(
         self,
         tile: Iterable,
         year: int,
         bucket: str,
         bucket_path: str,
-        dask_config: dict = None,
+        dask_config: dict | None = None,
+        dask_chunks: dict | None = None,
         overwrite: bool = False,
         version: str = "0.0.0",
         *args,
@@ -74,12 +77,18 @@ class LDNPRocessor:
         if dask_config is not None:
             self.dask_config = dask_config
 
+        if dask_chunks is not None:
+            self.dask_chunks = dask_chunks
+
         self.overwrite = overwrite
 
-        self._setup_logger()
+        # Initialise the logger
+        self._configure_logging()
+
+        # Configure the S3 read access and performance settings
         configure_s3_access(cloud_defaults=True, requester_pays=True)
 
-    def _setup_logger(self) -> Logger:
+    def _configure_logging(self) -> Logger:
         """Set up a simple logger"""
         console = StreamHandler()
         time_format = "%Y-%m-%d %H:%M:%S"
@@ -90,8 +99,9 @@ class LDNPRocessor:
             )
         )
 
-        log = getLogger("GEOMAD")
-        log.addHandler(console)
+        log = getLogger("LDN")
+        if not log.hasHandlers():
+            log.addHandler(console)
         log.setLevel(INFO)
 
         self.log = log
@@ -114,6 +124,19 @@ class LDNPRocessor:
         name = self.tile_id if var is None else f"{self.tile_id}_{var}"
         return f"{self.path}/{name}.{ext}"
 
+    def s3_exists(
+        self, bucket: str, key: str, client: BaseClient | None = None
+    ) -> bool:
+        """Check if a key exists in a bucket."""
+        if client is None:
+            client = boto3.client("s3")
+
+        try:
+            client.head_object(Bucket=bucket, Key=key)
+            return True
+        except client.exceptions.ClientError:
+            return False
+
     def s3_dump(
         self,
         data: bytes,
@@ -128,6 +151,10 @@ class LDNPRocessor:
         assert 200 <= code < 300
 
         return f"s3://{self.bucket}/{key}"
+
+    def stac_exists(self):
+        client = boto3.client("s3")
+        return self.s3_exists(self.bucket, self.key(None, "stac-item.json"), client)
 
     def get_stac_item(self):
         assets = {
@@ -163,17 +190,23 @@ class LDNPRocessor:
 
         self.log.info(f"Found {len(self.items)} items")
 
-    def load(self):
+    def load(self, decimated=False):
         if self.items is None:
             self.log.error("No items to load")
+            return
 
         self.log.info(f"Loading {len(self.items)} items")
 
+        geobox = self.geobox
+        if decimated:
+            self.log.warning("Working at low resolution")
+            geobox = geobox.zoom_out(10)
+
         data = load(
             self.items,
-            geobox=self.geobox,
+            geobox=geobox,
             measurements=["red", "nir08", "qa_pixel"],
-            chunks={"x": 2501, "y": 2501, "time": 1},
+            chunks=self.dask_chunks,
             groupby="solar_day",
             dtype="uint16",
             nodata=0,
@@ -192,72 +225,68 @@ class LDNPRocessor:
     def transform(self):
         if self.data is None:
             self.log.error("No data to transform")
+            return
 
+        self.log.info("Preparing data...")
         # Mask the data and compute the indices
         masked = mask_usgs_landsat(self.data)
         indices = create_land_productivity_indices(masked, drop=True)
 
-        # Group data by month, so we can more easily interpolate and
+        self.log.info("Resampling to monthly...")
+        # Group data by month, so we can more easily interpolate and fill gaps
         monthly = indices.resample(time="1ME").max()
 
-        # Load data at this point, so we can interpolate and fill gaps
+        # Load data into memory here
         with DaskClient(**self.dask_config):
-            loaded = monthly.compute()
+            self.log.info("Interpolating and filling gaps using threads...")
+            filled = (
+                monthly.chunk({"time": -1}).interpolate_na("time", method="linear")
+                .bfill("time")
+                .ffill("time")
+            ).compute()
 
-        # And interpolate missing values... also fill any gaps with the nearest value (in time, back then forwards)
-        filled = (
-            loaded.interpolate_na("time", method="polynomial", order=2)
-            .bfill("time")
-            .ffill("time")
-        )
+            self.log.info("Computing the integral...")
+            # Select just the year we are interested in and compute the integral
+            self.results = filled.sel(time=f"{self.year}").integrate(
+                "time", datetime_unit="D"
+            )
 
-        # Select just the year we are interested in and compute the integral
-        integral = filled.sel(time=f"{self.year}").integrate("time", datetime_unit="D")
-
-        # Todo: consider adding other statistics, like median or max
+            # Todo: consider adding other statistics, like median or max
 
         self.log.info(
-            f"Results processed with shape lon: {integral.sizes['longitude']} lat: {integral.sizes['latitude']}"
+            f"Results processed with shape lon: {self.results.sizes['longitude']} lat: {self.results.sizes['latitude']}"
         )
 
-        del monthly, loaded, filled
-
-        # Results should be in memory
-        self.results = integral
-
-    def write(self):
+    def write(self, overwrite=False):
         if self.results is None:
             self.log.error("No results to save")
+            return
+
+        overwrite = overwrite or self.overwrite
 
         # Set up our client
         s3 = boto3.client("s3")
 
         # Check if we're already done
         stac_key = self.key(None, "stac-item.json")
-        if not self.overwrite:
-            try:
-                s3.head_object(Bucket=self.bucket, Key=stac_key)
-                self.log.info(f"Skipping {stac_key} as it already exists")
-                return
-            except s3.exceptions.ClientError as e:
-                self.log.exception(e)
+        if not overwrite and self.s3_exists(self.bucket, stac_key, s3):
+            self.log.info(f"Skipping {stac_key} as it already exists")
+            return
 
         written = []
 
         # Write files to S3 as cloud optimised GeoTIFFs
         for var in self.results.data_vars:
-            if not self.overwrite:
-                try:
-                    s3.head_object(Bucket=self.bucket, Key=self.key(var, "tif"))
-                    self.log.info(f"Skipping {var} as it already exists")
-                    continue
-                except s3.exceptions.ClientError as e:
-                    self.log.exception(e)
+            key = self.key(var, "tif")
+
+            # Skip if it exists and we're not overwriting
+            if not overwrite and self.s3_exists(self.bucket, key, s3):
+                self.log.info(f"Skipping {var} as it already exists")
+                continue
+
             # Get and write the cog
             binary_cog = to_cog(self.results[var], nodata=np.nan)
-            out_path = self.s3_dump(
-                binary_cog, self.key(var, "tif"), s3, content_type="image/tiff"
-            )
+            out_path = self.s3_dump(binary_cog, key, s3, content_type="image/tiff")
 
             # Keep notes
             written.append((var, out_path))
@@ -277,3 +306,16 @@ class LDNPRocessor:
         self.log.info(
             f"Saved {len(written)} files and STAC item to https://{self.bucket}/{stac_key}"
         )
+
+    def run(self):
+        self.log.info("Starting full run...")
+
+        if self.stac_exists():
+            self.log.info("STAC item already exists")
+        else:
+            self.find()
+            self.load()
+            self.transform()
+            self.write()
+
+        self.log.info("Finished full run")
