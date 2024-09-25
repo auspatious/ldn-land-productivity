@@ -56,7 +56,7 @@ def create_land_productivity_indices(data: Dataset, drop: bool = True) -> Datase
     # EVI2
     data["evi2"] = (
         2.5 * (data["nir"] - data["red"]) / (data["nir"] + 2.4 * data["red"] + 1)
-    ).clip(-1, 1)
+    ).clip(0, 1)
 
     if drop:
         data = data.drop_vars(["red", "nir"])

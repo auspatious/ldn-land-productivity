@@ -310,7 +310,7 @@ class LDNPRocessor:
     def run(self):
         self.log.info("Starting full run...")
 
-        if self.stac_exists():
+        if not self.overwrite and self.stac_exists():
             self.log.info("STAC item already exists")
         else:
             self.find()
