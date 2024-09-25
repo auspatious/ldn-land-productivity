@@ -1,6 +1,6 @@
 import numpy as np
-from xarray import Dataset
 from odc.geo.gridspec import GridSpec
+from xarray import Dataset
 
 WGS84GRID10 = GridSpec("EPSG:4326", tile_shape=(15000, 15000), resolution=0.0001)
 WGS84GRID30 = GridSpec("EPSG:4326", tile_shape=(5000, 5000), resolution=0.0003)
@@ -45,15 +45,18 @@ def create_land_productivity_indices(data: Dataset, drop: bool = True) -> Datase
     """Create NDVI, MSAVI and EVI2 indices"""
 
     # NDVI
-    data["ndvi"] = (data["nir"] - data["red"]) / (data["nir"] + data["red"])
+    data["ndvi"] = (data["nir"] - data["red"]) / (data["nir"] + data["red"]).clip(-1, 1)
 
     # MSAVI
     data["msavi"] = 0.5 * (
-        (2 * data["nir"] + 1) - np.sqrt((2 * data["nir"] + 1) ** 2 - 8 * (data["nir"] - data["red"]))
-    )
+        (2 * data["nir"] + 1)
+        - np.sqrt((2 * data["nir"] + 1) ** 2 - 8 * (data["nir"] - data["red"]))
+    ).clip(0, 1)
 
     # EVI2
-    data["evi2"] = 2.5 * (data["nir"] - data["red"]) / (data["nir"] + 2.4 * data["red"] + 1)
+    data["evi2"] = (
+        2.5 * (data["nir"] - data["red"]) / (data["nir"] + 2.4 * data["red"] + 1)
+    ).clip(-1, 1)
 
     if drop:
         data = data.drop_vars(["red", "nir"])

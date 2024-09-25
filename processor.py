@@ -1,35 +1,30 @@
 # Description: This file contains the processor class that is used to process the data
 
 import json
-from typing import Iterable
-import numpy as np
-from pystac_client import Client
-from pystac import ItemCollection, Asset, Item
-from odc.stac import load, configure_s3_access
-from odc.geo.cog import to_cog
-from dask.distributed import Client as DaskClient
-from xarray import Dataset
-
 from datetime import datetime, timezone
+from logging import INFO, Formatter, Logger, StreamHandler, getLogger
+from typing import Iterable
 
 import boto3
+import numpy as np
 from botocore.client import BaseClient
-
+from dask.distributed import Client as DaskClient
+from odc.geo.cog import to_cog
+from odc.geo.geobox import GeoBox
+from odc.stac import configure_s3_access, load
+from pystac import Asset, Item, ItemCollection
+from pystac_client import Client
 from rio_stac import create_stac_item
-
+from xarray import Dataset
 
 from utils import (
-    WGS84GRID30,
-    USGSLANDSAT,
     USGSCATALOG,
+    USGSLANDSAT,
+    WGS84GRID30,
+    create_land_productivity_indices,
     http_to_s3_url,
     mask_usgs_landsat,
-    create_land_productivity_indices,
 )
-
-from odc.geo.geobox import GeoBox
-
-from logging import getLogger, StreamHandler, Formatter, Logger, INFO
 
 
 class LDNPRocessor:
@@ -45,7 +40,6 @@ class LDNPRocessor:
     items: ItemCollection = None
     data: Dataset = None
     results: Dataset = None
-    cached: bool = False
 
     collection: str = "geo-ls-lp"
     item: Item = None
@@ -179,7 +173,7 @@ class LDNPRocessor:
             self.items,
             geobox=self.geobox,
             measurements=["red", "nir08", "qa_pixel"],
-            chunks={"x": 2501, "y": 2501},
+            chunks={"x": 2501, "y": 2501, "time": 1},
             groupby="solar_day",
             dtype="uint16",
             nodata=0,
@@ -195,27 +189,30 @@ class LDNPRocessor:
 
         self.data = data
 
-    def transform(self, cache=False):
+    def transform(self):
         if self.data is None:
             self.log.error("No data to transform")
 
+        # Mask the data and compute the indices
         masked = mask_usgs_landsat(self.data)
         indices = create_land_productivity_indices(masked, drop=True)
-        monthly = indices.resample(time="1ME").median()
 
-        # Todo: see if this can be done with more fancy interpolation
-        filled = monthly.bfill("time").ffill("time")
+        # Group data by month, so we can more easily interpolate and
+        monthly = indices.resample(time="1ME").max()
 
-        # Interpolate daily data, so we can compute the integral
-        daily = filled.resample(time="1D")
-        interpolated = daily.interpolate("linear").sel(
-            time=slice(f"{self.year}-01-01", f"{self.year}-12-31")
+        # Load data at this point, so we can interpolate and fill gaps
+        with DaskClient(**self.dask_config):
+            loaded = monthly.compute()
+
+        # And interpolate missing values... also fill any gaps with the nearest value (in time, back then forwards)
+        filled = (
+            loaded.interpolate_na("time", method="polynomial", order=2)
+            .bfill("time")
+            .ffill("time")
         )
-        integral = interpolated.integrate("time", datetime_unit="D")
 
-        if cache:
-            with DaskClient(**self.dask_config):
-                integral = integral.compute()
+        # Select just the year we are interested in and compute the integral
+        integral = filled.sel(time=f"{self.year}").integrate("time", datetime_unit="D")
 
         # Todo: consider adding other statistics, like median or max
 
@@ -223,6 +220,9 @@ class LDNPRocessor:
             f"Results processed with shape lon: {integral.sizes['longitude']} lat: {integral.sizes['latitude']}"
         )
 
+        del monthly, loaded, filled
+
+        # Results should be in memory
         self.results = integral
 
     def write(self):
@@ -244,32 +244,25 @@ class LDNPRocessor:
 
         written = []
 
-        def _process():
-            # Write files to S3 as cloud optimised GeoTIFFs
-            for var in self.results.data_vars:
-                if not self.overwrite:
-                    try:
-                        s3.head_object(Bucket=self.bucket, Key=self.key(var, "tif"))
-                        self.log.info(f"Skipping {var} as it already exists")
-                        continue
-                    except s3.exceptions.ClientError as e:
-                        self.log.exception(e)
-                # Get and write the cog
-                binary_cog = to_cog(self.results[var], nodata=np.nan)
-                out_path = self.s3_dump(
-                    binary_cog, self.key(var, "tif"), s3, content_type="image/tiff"
-                )
+        # Write files to S3 as cloud optimised GeoTIFFs
+        for var in self.results.data_vars:
+            if not self.overwrite:
+                try:
+                    s3.head_object(Bucket=self.bucket, Key=self.key(var, "tif"))
+                    self.log.info(f"Skipping {var} as it already exists")
+                    continue
+                except s3.exceptions.ClientError as e:
+                    self.log.exception(e)
+            # Get and write the cog
+            binary_cog = to_cog(self.results[var], nodata=np.nan)
+            out_path = self.s3_dump(
+                binary_cog, self.key(var, "tif"), s3, content_type="image/tiff"
+            )
 
-                # Keep notes
-                written.append((var, out_path))
+            # Keep notes
+            written.append((var, out_path))
 
-                self.log.info(f"Finished writing {var} to {out_path}")
-
-        if not self.cached:
-            with DaskClient(**self.dask_config):
-                _process()
-        else:
-            _process()
+            self.log.info(f"Finished writing {var} to {out_path}")
 
         # Create a STAC document
         item = self.get_stac_item()
@@ -279,8 +272,8 @@ class LDNPRocessor:
 
         # Write the STAC document
         stac_item_json = json.dumps(item.to_dict(), indent=4)
-        self.s3_dump(
-            stac_item_json, stac_key, s3, content_type="application/json"
-        )
+        self.s3_dump(stac_item_json, stac_key, s3, content_type="application/json")
 
-        self.log.info(f"Saved {len(written)} files and STAC item to https://{self.bucket}/{stac_key}")
+        self.log.info(
+            f"Saved {len(written)} files and STAC item to https://{self.bucket}/{stac_key}"
+        )
