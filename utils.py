@@ -1,9 +1,13 @@
 import numpy as np
-from odc.geo.gridspec import GridSpec
+from odc.geo.gridspec import GridSpec, XY
 from xarray import Dataset
 
-WGS84GRID10 = GridSpec("EPSG:4326", tile_shape=(15000, 15000), resolution=0.0001)
-WGS84GRID30 = GridSpec("EPSG:4326", tile_shape=(5000, 5000), resolution=0.0003)
+WGS84GRID10 = GridSpec(
+    "EPSG:4326", tile_shape=(15000, 15000), resolution=0.0001, origin=XY(-180, -90)
+)
+WGS84GRID30 = GridSpec(
+    "EPSG:4326", tile_shape=(5000, 5000), resolution=0.0003, origin=XY(-180, -90)
+)
 
 USGSCATALOG = "https://landsatlook.usgs.gov/stac-server/"
 USGSLANDSAT = "landsat-c2l2-sr"
