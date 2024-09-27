@@ -2,8 +2,6 @@
 
 ## Outstanding issues
 
-* Fix so that there's no negative tile numbers
-* Sort out tile `119/-12`, which seems to have missing antimeridian scenes
 
 ## Processing notes
 

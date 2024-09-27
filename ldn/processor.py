@@ -17,7 +17,7 @@ from pystac_client import Client
 from rio_stac import create_stac_item
 from xarray import Dataset
 
-from utils import (
+from ldn.utils import (
     USGSCATALOG,
     USGSLANDSAT,
     WGS84GRID30,
@@ -58,7 +58,7 @@ class LDNPRocessor:
         tile: Iterable,
         year: int,
         bucket: str,
-        bucket_path: str,
+        bucket_path: str | None = None,
         dask_config: dict | None = None,
         dask_chunks: dict | None = None,
         overwrite: bool = False,
@@ -108,17 +108,21 @@ class LDNPRocessor:
 
     @property
     def tile_id(self):
-        return f"{self.collection}_{self.year}_{self.tile[0]:03}_{self.tile[1]:03}"
+        return f"{self.collection.replace('-', '_')}_{self.year}_{self.tile[0]:03}_{self.tile[1]:03}"
 
     @property
     def path(self):
-        out_path = (
-            f"{self.bucket_path}/"
-            f"{self.collection.replace('-', '_')}/"
-            f"{self.version.replace('.', '_')}/"
-            f"{self.year}/{self.tile[0]:03}/{self.tile[1]:03}"
-        )
-        return out_path
+        parts = []
+        if self.bucket_path is not None:
+            parts.append(self.bucket_path)
+
+        parts = parts + [
+            self.collection.replace("-", "_"),
+            self.version.replace(".", "_"),
+            str(self.year),
+        ]
+
+        return "/".join(parts)
 
     def key(self, var: str | None, ext: str = "tif"):
         name = self.tile_id if var is None else f"{self.tile_id}_{var}"
@@ -238,9 +242,10 @@ class LDNPRocessor:
 
         # Load data into memory here
         with DaskClient(**self.dask_config):
-            self.log.info("Interpolating and filling gaps using threads...")
+            self.log.info("Interpolating and filling gaps...")
             filled = (
-                monthly.chunk({"time": -1}).interpolate_na("time", method="linear")
+                monthly.chunk({"time": -1})
+                .interpolate_na("time", method="linear")
                 .bfill("time")
                 .ffill("time")
             ).compute()
@@ -307,14 +312,14 @@ class LDNPRocessor:
             f"Saved {len(written)} files and STAC item to https://{self.bucket}/{stac_key}"
         )
 
-    def run(self):
+    def run(self, decimated=False):
         self.log.info("Starting full run...")
 
         if not self.overwrite and self.stac_exists():
             self.log.info("STAC item already exists")
         else:
             self.find()
-            self.load()
+            self.load(decimated=decimated)
             self.transform()
             self.write()
 
