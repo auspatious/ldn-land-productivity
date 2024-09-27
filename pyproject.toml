@@ -1,0 +1,41 @@
+[project]
+name = "ldn"
+dynamic = ["version"]
+description = "LDN land productivity data processing tooling"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{ name = "Alex Leith", email = "alex@auspatious.com" }]
+keywords = ["land-degradation", "land-productivity", "ldn", "stac", "datacube"]
+
+dependencies = [
+    "boto3",
+    "dask",
+    "distributed",
+    "hatchling",
+    "hatch-vcs",
+    "odc-stac",
+    "odc-geo",
+    "pystac",
+    "pystac-client",
+    "rio-stac",
+    "scipy",
+    "typer"
+]
+
+[project.optional-dependencies]
+dev = ["poetry", "bokeh", "bottleneck", "folium", "jinja2", "matplotlib"]
+
+[project.scripts]
+ldn-processor = "ldn.cli:app"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "ldn/_version.py"
+version-attr = "__version__"
