@@ -33,17 +33,18 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
 
       - name: Get version number for tagging the image
         id: version
         run: |
           # Get version from the python package
           git fetch --all --tags
-          git describe --tags
           echo "VERSION=$(git describe --tags)" >> $GITHUB_OUTPUT
       
+      # Cache docker stuff
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
       - name: Build and export to Docker
         uses: docker/build-push-action@v6
         with:

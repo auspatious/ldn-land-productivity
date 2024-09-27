@@ -29,7 +29,7 @@ WORKDIR /code
 ADD . /code/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-dev && uv pip install hatch hatch-vcs
+    uv sync --no-dev
 
 # Place executables in the environment at the front of the path
 ENV PATH="/code/.venv/bin:$PATH"
