@@ -38,7 +38,7 @@ jobs:
       - run: |
           git tag
           git status
-          git describe
+          git describe --tags
       
       - name: Build and export to Docker
         uses: docker/build-push-action@v6
