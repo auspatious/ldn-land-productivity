@@ -12,6 +12,7 @@ dependencies = [
     "boto3",
     "dask",
     "distributed",
+    "geopandas",
     "hatchling",
     "hatch-vcs",
     "odc-stac",
