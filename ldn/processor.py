@@ -17,6 +17,8 @@ from pystac_client import Client
 from rio_stac import create_stac_item
 from xarray import Dataset
 
+from dask import config
+
 from ldn.utils import (
     USGSCATALOG,
     USGSLANDSAT,
@@ -47,7 +49,7 @@ class LDNPRocessor:
 
     dask_config = {
         "n_workers": 4,
-        "threads_per_worker": 1,
+        "threads_per_worker": 8,
         "memory_limit": "16GB",
     }
 
@@ -241,20 +243,30 @@ class LDNPRocessor:
         monthly = indices.resample(time="1ME").max()
 
         # Load data into memory here
-        with DaskClient(**self.dask_config):
-            self.log.info("Interpolating and filling gaps...")
-            filled = (
-                monthly.chunk({"time": -1})
-                .interpolate_na("time", method="linear")
-                .bfill("time")
-                .ffill("time")
-            ).compute()
 
-            self.log.info("Computing the integral...")
-            # Select just the year we are interested in and compute the integral
-            self.results = filled.sel(time=f"{self.year}").integrate(
-                "time", datetime_unit="D"
-            )
+        with config.set(
+            {
+                "dataframe.shuffle.method": "p2p",
+                "distributed.worker.memory.target": False,
+                "distributed.worker.memory.spill": False,
+                "distributed.worker.memory.pause": 0.9,
+                "distributed.worker.memory.terminate": 0.98,
+            }
+        ):
+            with DaskClient(**self.dask_config):
+                self.log.info("Interpolating and filling gaps...")
+                filled = (
+                    monthly.chunk({"time": -1})
+                    .interpolate_na("time", method="linear")
+                    .bfill("time")
+                    .ffill("time")
+                ).compute()
+
+                self.log.info("Computing the integral...")
+                # Select just the year we are interested in and compute the integral
+                self.results = filled.sel(time=f"{self.year}").integrate(
+                    "time", datetime_unit="D"
+                )
 
             # Todo: consider adding other statistics, like median or max
 
