@@ -7,7 +7,9 @@ from typing import Iterable, List, Tuple
 
 import boto3
 import numpy as np
+import rasterio
 from botocore.client import BaseClient
+from dask import config
 from dask.distributed import Client as DaskClient
 from odc.geo.cog import to_cog
 from odc.geo.geobox import GeoBox
@@ -17,9 +19,6 @@ from pystac_client import Client
 from rio_stac import create_stac_item
 from rio_stac.stac import get_raster_info
 from xarray import Dataset
-import rasterio
-
-from dask import config
 
 from ldn.utils import (
     USGSCATALOG,
@@ -301,7 +300,7 @@ class LDNPRocessor:
 
         # Check if we're already done
         if not overwrite and self.s3_exists(self.bucket, self.key(None, "stac-item.json"), s3):
-            self.log.info(f"Skipping this tile as it already exists")
+            self.log.info("Skipping this tile as it already exists")
             return
 
         # Write files to S3 as cloud optimised GeoTIFFs
