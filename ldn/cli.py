@@ -34,7 +34,8 @@ def run(
     decimated: bool = False,
 ):
     if tile is None:
-        aws_job_id = os.environ.get("AWS_BATCH_JOB_ID")
+        aws_job_id = os.environ.get("AWS_BATCH_JOB_ARRAY_INDEX")
+        typer.echo(f"AWS_BATCH_JOB_ARRAY_INDEX: {aws_job_id}")
         if aws_job_id is None:
             raise typer.BadParameter(
                 "Tile must be provided as an argument or via the AWS_BATCH_JOB_ID environment variable"
