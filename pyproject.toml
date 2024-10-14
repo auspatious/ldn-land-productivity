@@ -10,6 +10,7 @@ keywords = ["land-degradation", "land-productivity", "ldn", "stac", "datacube"]
 
 dependencies = [
     "boto3",
+    "bottleneck",
     "dask",
     "distributed",
     "geopandas",

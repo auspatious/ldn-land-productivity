@@ -19,7 +19,7 @@ USGSCATALOG = "https://landsatlook.usgs.gov/stac-server/"
 USGSLANDSAT = "landsat-c2l2-sr"
 
 
-def all_tiles():
+def get_tiles():
     # Load our extents
     this_folder = Path(__file__).parent
     gdf = gpd.read_file(this_folder / "aois.geojson")
@@ -42,7 +42,7 @@ def all_tiles():
 
 
 def get_tile_index(tile_index: int) -> Tuple[int, int]:
-    return all_tiles()[tile_index][0]
+    return get_tiles()[tile_index][0]
 
 
 def http_to_s3_url(http_url):
