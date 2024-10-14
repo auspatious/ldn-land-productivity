@@ -28,8 +28,7 @@ def run(
     n_workers: int = 4,
     threads_per_worker: int = 16,
     memory_limit: str = "40GB",
-    longitude_chunks: int = 1250,
-    latitude_chunks: int = 1250,
+    lon_lat_chunks: int = 1250,
     overwrite: bool = False,
     version: str = "0.0.1",
     decimated: bool = False,
@@ -49,8 +48,8 @@ def run(
         "memory_limit": memory_limit,
     }
     dask_chunks = {
-        "longitude": longitude_chunks,
-        "latitude": latitude_chunks,
+        "longitude": lon_lat_chunks,
+        "latitude": lon_lat_chunks,
         "time": -1,
     }
 

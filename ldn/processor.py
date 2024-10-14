@@ -121,6 +121,8 @@ class LDNPRocessor:
         parts = parts + [
             self.collection.replace("-", "_"),
             self.version.replace(".", "_"),
+            f"{self.tile[0]:03}",
+            f"{self.tile[1]:03}",
             str(self.year),
         ]
 
@@ -320,9 +322,9 @@ class LDNPRocessor:
         stac_item_json = json.dumps(item.to_dict(), indent=4)
         self.s3_dump(stac_item_json, stac_key, s3, content_type="application/json")
 
-        self.log.info(
-            f"Saved {len(written)} files and STAC item to https://{self.bucket}/{stac_key}"
-        )
+        written.append(("STAC", f"s3://{self.bucket}/{stac_key}"))
+
+        self.log.info(f"Finished writing {len(written)} files and stac doc")
 
     def run(self, decimated=False):
         self.log.info("Starting full run...")
@@ -335,4 +337,4 @@ class LDNPRocessor:
             self.transform()
             self.write()
 
-        self.log.info("Finished full run")
+        self.log.info(f"Finished full run, STAC is at: {self.item.self_href}")
