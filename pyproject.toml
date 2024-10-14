@@ -17,7 +17,7 @@ dependencies = [
     "hatchling",
     "hatch-vcs",
     "odc-stac",
-    "odc-geo",
+    "git+https://github.com/opendatacube/odc-geo.git@fix-precision-gridspec",  # odc-geo with fix
     "pystac",
     "pystac-client",
     "rio-stac",

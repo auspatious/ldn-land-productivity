@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timezone
 from logging import INFO, Formatter, Logger, StreamHandler, getLogger
-from typing import Iterable
+from typing import Iterable, List, Tuple
 
 import boto3
 import numpy as np
@@ -15,7 +15,9 @@ from odc.stac import configure_s3_access, load
 from pystac import Asset, Item, ItemCollection
 from pystac_client import Client
 from rio_stac import create_stac_item
+from rio_stac.stac import get_raster_info
 from xarray import Dataset
+import rasterio
 
 from dask import config
 
@@ -46,6 +48,7 @@ class LDNPRocessor:
     collection: str = "geo-ls-lp"
     item: Item = None
     version: str = None
+    written: List[Tuple[str, str]] = []
 
     dask_config = {
         "n_workers": 4,
@@ -158,26 +161,31 @@ class LDNPRocessor:
         code = r["ResponseMetadata"]["HTTPStatusCode"]
         assert 200 <= code < 300
 
-        return f"s3://{self.bucket}/{key}"
+        return f"https://{self.bucket}/{key}"
 
     def stac_exists(self):
         client = boto3.client("s3")
         return self.s3_exists(self.bucket, self.key(None, "stac-item.json"), client)
 
     def get_stac_item(self):
-        assets = {
-            var: Asset(
+        assets = {}
+
+        for name, href in self.written:
+            if name == "STAC":
+                continue
+            with rasterio.open(href) as src_dst:
+                raster_info = {"raster:bands": get_raster_info(src_dst, max_size=1024)}
+            assets[name] = Asset(
                 media_type="image/tiff; application=geotiff; profile=cloud-optimized",
-                href=f"https://{self.bucket}/{self.key(var)}",
+                href=href,
                 roles=["data"],
+                extra_fields=raster_info
             )
-            for var in self.results.data_vars
-        }
 
         # Get the first asset href
-        href = list(assets.values())[0].href
+        href = self.written[0][1]
 
-        return create_stac_item(
+        item = create_stac_item(
             href,
             id=self.tile_id,
             collection=self.collection,
@@ -186,6 +194,12 @@ class LDNPRocessor:
             with_proj=True,
             with_raster=True,
         )
+
+        item.set_self_href(f"https://{self.bucket}/{self.key(None, 'stac-item.json')}")
+
+        self.item = item
+
+        return item
 
     def find(self):
         client = Client.open(USGSCATALOG)
@@ -245,7 +259,6 @@ class LDNPRocessor:
         monthly = indices.resample(time="1ME").max()
 
         # Load data into memory here
-
         with config.set(
             {
                 "dataframe.shuffle.method": "p2p",
@@ -287,12 +300,9 @@ class LDNPRocessor:
         s3 = boto3.client("s3")
 
         # Check if we're already done
-        stac_key = self.key(None, "stac-item.json")
-        if not overwrite and self.s3_exists(self.bucket, stac_key, s3):
-            self.log.info(f"Skipping {stac_key} as it already exists")
+        if not overwrite and self.s3_exists(self.bucket, self.key(None, "stac-item.json"), s3):
+            self.log.info(f"Skipping this tile as it already exists")
             return
-
-        written = []
 
         # Write files to S3 as cloud optimised GeoTIFFs
         for var in self.results.data_vars:
@@ -308,23 +318,21 @@ class LDNPRocessor:
             out_path = self.s3_dump(binary_cog, key, s3, content_type="image/tiff")
 
             # Keep notes
-            written.append((var, out_path))
+            self.written.append((var, out_path))
 
             self.log.info(f"Finished writing {var} to {out_path}")
 
         # Create a STAC document
         item = self.get_stac_item()
-        item.set_self_href(f"https://{self.bucket}/{stac_key}")
-
-        self.item = item
 
         # Write the STAC document
         stac_item_json = json.dumps(item.to_dict(), indent=4)
-        self.s3_dump(stac_item_json, stac_key, s3, content_type="application/json")
+        self.s3_dump(stac_item_json, self.key(None, "stac-item.json"), s3, content_type="application/json")
 
-        written.append(("STAC", f"s3://{self.bucket}/{stac_key}"))
+        self.log.info(f"Finished writing STAC to {self.item.self_href}")
+        self.written.append(("STAC", self.item.self_href))
 
-        self.log.info(f"Finished writing {len(written)} files and stac doc")
+        self.log.info(f"Finished writing {len(self.written)} files")
 
     def run(self, decimated=False):
         self.log.info("Starting full run...")

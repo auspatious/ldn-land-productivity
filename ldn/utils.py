@@ -3,6 +3,7 @@ from typing import Tuple
 import geopandas as gpd
 import numpy as np
 from odc.geo import Geometry
+from odc.geo.geobox import GeoBox
 from odc.geo.gridspec import XY, GridSpec
 from xarray import Dataset
 
@@ -19,7 +20,8 @@ USGSCATALOG = "https://landsatlook.usgs.gov/stac-server/"
 USGSLANDSAT = "landsat-c2l2-sr"
 
 
-def get_tiles():
+def get_tiles() -> list[Tuple[Tuple[int, int], GeoBox]]:
+    """Get all the tiles for all AOIs, returning a list of (tile_index, geobox)"""
     # Load our extents
     this_folder = Path(__file__).parent
     gdf = gpd.read_file(this_folder / "aois.geojson")
@@ -60,7 +62,8 @@ def mask_usgs_landsat(data: Dataset) -> Dataset:
 
     # Bitwise AND to select any pixel that is cloud shadow or cloud or nodata
     cloud_mask = (data.qa_pixel & bitflags) != 0
-    # Note that it might be a good idea to dilate the mask here to catch any pixels that are adjacent to clouds
+    # Note that it might be a good idea to dilate the mask here to catch
+    # any pixels that are adjacent to clouds
 
     # Pick out nodata too
     nodata_mask = data.qa_pixel == 0
@@ -81,7 +84,9 @@ def create_land_productivity_indices(data: Dataset, drop: bool = True) -> Datase
     """Create NDVI, MSAVI and EVI2 indices"""
 
     # NDVI
-    data["ndvi"] = (data["nir"] - data["red"]) / (data["nir"] + data["red"]).clip(-1, 1)
+    data["ndvi"] = ((data["nir"] - data["red"]) / (data["nir"] + data["red"])).clip(
+        -1, 1
+    )
 
     # MSAVI
     data["msavi"] = 0.5 * (
