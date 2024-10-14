@@ -1,6 +1,12 @@
+from typing import Tuple
+
+import geopandas as gpd
 import numpy as np
-from odc.geo.gridspec import GridSpec, XY
+from odc.geo import Geometry
+from odc.geo.gridspec import XY, GridSpec
 from xarray import Dataset
+
+from pathlib import Path
 
 WGS84GRID10 = GridSpec(
     "EPSG:4326", tile_shape=(15000, 15000), resolution=0.0001, origin=XY(-180, -90)
@@ -11,6 +17,32 @@ WGS84GRID30 = GridSpec(
 
 USGSCATALOG = "https://landsatlook.usgs.gov/stac-server/"
 USGSLANDSAT = "landsat-c2l2-sr"
+
+
+def all_tiles():
+    # Load our extents
+    this_folder = Path(__file__).parent
+    gdf = gpd.read_file(this_folder / "aois.geojson")
+
+    # 0 is Fiji, 1 is Caribbean and 2 is Belize
+    fiji = list(
+        WGS84GRID30.tiles_from_geopolygon(Geometry(gdf.geometry[0], crs="epsg:4326"))
+    )
+    carb = list(
+        WGS84GRID30.tiles_from_geopolygon(Geometry(gdf.geometry[1], crs="epsg:4326"))
+    )
+    belz = list(
+        WGS84GRID30.tiles_from_geopolygon(Geometry(gdf.geometry[2], crs="epsg:4326"))
+    )
+
+    # This is all the tiles
+    tiles = fiji + carb + belz
+
+    return tiles
+
+
+def get_tile_index(tile_index: int) -> Tuple[int, int]:
+    return all_tiles()[tile_index][0]
 
 
 def http_to_s3_url(http_url):

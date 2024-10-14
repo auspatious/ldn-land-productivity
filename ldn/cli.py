@@ -1,20 +1,27 @@
-import typer
+import os
 from typing import Tuple
+
+from ldn.utils import get_tile_index
+
+import typer
 
 from ldn.processor import LDNPRocessor
 
 app = typer.Typer()
 
-def parse_tile(tile: str) -> Tuple[int, int]:
-    print(tile)
+
+def parse_tile(tile: str | None) -> Tuple[int, int] | None:
+    if tile is None:
+        return None
     try:
         return tuple(map(int, tile.strip("()").split(",")))
     except ValueError:
         raise typer.BadParameter("Tile must be in the format (x, y)")
 
+
 @app.command()
 def run(
-    tile: str = typer.Argument(..., callback=parse_tile),
+    tile: str | None = typer.Option(default=None, callback=parse_tile),
     year: int = 2023,
     bucket: str = "data.ldn.auspatious.com",
     bucket_path: str | None = None,
@@ -27,6 +34,15 @@ def run(
     version: str = "0.0.1",
     decimated: bool = False,
 ):
+    if tile is None:
+        aws_job_id = os.environ.get("AWS_BATCH_JOB_ID")
+        if aws_job_id is None:
+            raise typer.BadParameter(
+                "Tile must be provided as an argument or via the AWS_BATCH_JOB_ID environment variable"
+            )
+
+        tile = get_tile_index(int(aws_job_id))
+
     dask_config = {
         "n_workers": n_workers,
         "threads_per_worker": threads_per_worker,
@@ -35,9 +51,9 @@ def run(
     dask_chunks = {
         "longitude": longitude_chunks,
         "latitude": latitude_chunks,
-        "time": -1
+        "time": -1,
     }
-    
+
     proc = LDNPRocessor(
         tile=tile,
         year=year,
@@ -46,10 +62,11 @@ def run(
         dask_config=dask_config,
         dask_chunks=dask_chunks,
         overwrite=overwrite,
-        version=version
+        version=version,
     )
 
     proc.run(decimated=decimated)
+
 
 if __name__ == "__main__":
     app()
