@@ -71,7 +71,6 @@ class LDNPRocessor:
         *args,
         **kwargs,
     ):
-        self.tile = tile
         self.year = year
         self.bucket = bucket
         self.bucket_path = bucket_path
@@ -85,10 +84,10 @@ class LDNPRocessor:
 
         self.overwrite = overwrite
 
+        self._initialise_tile(tile)
+
         # Initialise the logger
         self._configure_logging()
-
-        self._initialise_tile(tile)
 
         # Configure the S3 read access and performance settings
         configure_s3_access(cloud_defaults=True, requester_pays=True)
@@ -114,9 +113,10 @@ class LDNPRocessor:
     def _initialise_tile(self, tile: Tuple[int, int]):
         assert len(tile) == 2
         if tile[1] >= 240:
-            tile = (tile[0], tile[1] - 240)
-        self.tile = tile
-        self.geobox = self.grid[tile]
+            self.tile = (tile[0], tile[1] - 240)
+        else:
+            self.tile = tile
+        self.geobox = self.grid[self.tile]
 
     @property
     def tile_id(self):
