@@ -2,6 +2,7 @@
 *.html
 ldn/_version.py
 *.tif
+*.aux.xml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

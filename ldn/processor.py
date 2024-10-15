@@ -12,7 +12,7 @@ from botocore.client import BaseClient
 from dask import config
 from dask.distributed import Client as DaskClient
 from odc.geo.cog import to_cog
-from odc.geo.geobox import GeoBox
+from odc.geo.geobox import GeoBox, GeoboxTiles
 from odc.stac import configure_s3_access, load
 from pystac import Asset, Item, ItemCollection
 from pystac_client import Client
@@ -34,6 +34,7 @@ class LDNPRocessor:
     log = None
     overwrite: bool = False
 
+    grid: GeoboxTiles = WGS84GRID30
     tile: Iterable = None
     geobox: GeoBox = None
     year: int = None
@@ -71,8 +72,6 @@ class LDNPRocessor:
         **kwargs,
     ):
         self.tile = tile
-        self.geobox = WGS84GRID30.tile_geobox(tile)
-        self.tile = tile
         self.year = year
         self.bucket = bucket
         self.bucket_path = bucket_path
@@ -88,6 +87,8 @@ class LDNPRocessor:
 
         # Initialise the logger
         self._configure_logging()
+
+        self._initialise_tile(tile)
 
         # Configure the S3 read access and performance settings
         configure_s3_access(cloud_defaults=True, requester_pays=True)
@@ -109,6 +110,13 @@ class LDNPRocessor:
         log.setLevel(INFO)
 
         self.log = log
+
+    def _initialise_tile(self, tile: Tuple[int, int]):
+        assert len(tile) == 2
+        if tile[1] >= 240:
+            tile = (tile[0], tile[1] - 240)
+        self.tile = tile
+        self.geobox = self.grid[tile]
 
     @property
     def tile_id(self):

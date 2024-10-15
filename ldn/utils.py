@@ -3,24 +3,31 @@ from typing import Tuple
 import geopandas as gpd
 import numpy as np
 from odc.geo import Geometry
-from odc.geo.geobox import GeoBox
-from odc.geo.gridspec import XY, GridSpec
+from odc.geo.geobox import GeoBox, GeoboxTiles
 from xarray import Dataset
+
+from affine import Affine
 
 from pathlib import Path
 
-WGS84GRID10 = GridSpec(
-    "EPSG:4326", tile_shape=(15000, 15000), resolution=0.0001, origin=XY(-180, -90)
+WGS84GRID10 = GeoboxTiles(
+    GeoBox(
+        (1800000, 3600000), Affine(0.0001, 0.0, -180.0, 0.0, 0.0001, -90.0), "epsg:4326"
+    ),
+    (5000, 5000),
 )
-WGS84GRID30 = GridSpec(
-    "EPSG:4326", tile_shape=(5000, 5000), resolution=0.0003, origin=XY(-180, -90)
+WGS84GRID30 = GeoboxTiles(
+    GeoBox(
+        (600000, 1200000), Affine(0.0003, 0.0, -180.0, 0.0, 0.0003, -90.0), "epsg:4326"
+    ),
+    (5000, 5000),
 )
 
 USGSCATALOG = "https://landsatlook.usgs.gov/stac-server/"
 USGSLANDSAT = "landsat-c2l2-sr"
 
 
-def get_tiles() -> list[Tuple[Tuple[int, int], GeoBox]]:
+def get_tiles(grid=WGS84GRID30) -> list[Tuple[Tuple[int, int], GeoBox]]:
     """Get all the tiles for all AOIs, returning a list of (tile_index, geobox)"""
     # Load our extents
     this_folder = Path(__file__).parent
@@ -28,19 +35,19 @@ def get_tiles() -> list[Tuple[Tuple[int, int], GeoBox]]:
 
     # 0 is Fiji, 1 is Caribbean and 2 is Belize
     fiji = list(
-        WGS84GRID30.tiles_from_geopolygon(Geometry(gdf.geometry[0], crs="epsg:4326"))
+        grid.tiles(Geometry(gdf.geometry[0], crs="epsg:4326"))
     )
     carb = list(
-        WGS84GRID30.tiles_from_geopolygon(Geometry(gdf.geometry[1], crs="epsg:4326"))
+        grid.tiles(Geometry(gdf.geometry[1], crs="epsg:4326"))
     )
     belz = list(
-        WGS84GRID30.tiles_from_geopolygon(Geometry(gdf.geometry[2], crs="epsg:4326"))
+        grid.tiles(Geometry(gdf.geometry[2], crs="epsg:4326"))
     )
 
     # This is all the tiles
     tiles = fiji + carb + belz
 
-    return tiles
+    return [(tile, grid[tile]) for tile in tiles]
 
 
 def get_tile_index(tile_index: int) -> Tuple[int, int]:
