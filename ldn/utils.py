@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Tuple
 
 import geopandas as gpd
@@ -7,8 +8,6 @@ from odc.geo.geobox import GeoBox, GeoboxTiles
 from xarray import Dataset
 
 from affine import Affine
-
-from pathlib import Path
 
 WGS84GRID10 = GeoboxTiles(
     GeoBox(
@@ -91,20 +90,19 @@ def create_land_productivity_indices(data: Dataset, drop: bool = True) -> Datase
     """Create NDVI, MSAVI and EVI2 indices"""
 
     # NDVI
-    data["ndvi"] = ((data["nir"] - data["red"]) / (data["nir"] + data["red"])).clip(
-        -1, 1
-    )
+    ndvi = (data.nir - data.red) / (data.nir + data.red)
+    data["ndvi"] = ndvi.clip(-1, 1)
 
     # MSAVI
-    data["msavi"] = 0.5 * (
-        (2 * data["nir"] + 1)
-        - np.sqrt((2 * data["nir"] + 1) ** 2 - 8 * (data["nir"] - data["red"]))
-    ).clip(0, 1)
+    msavi = 0.5 * (
+        (2 * data.nir + 1)
+        - np.sqrt((2 * data.nir + 1) ** 2 - 8 * (data.nir - data.red))
+    )
+    data["msavi"] = msavi.clip(0, 1)
 
     # EVI2
-    data["evi2"] = (
-        2.5 * (data["nir"] - data["red"]) / (data["nir"] + 2.4 * data["red"] + 1)
-    ).clip(0, 1)
+    evi2 = 2.5 * (data.nir - data.red) / (data.nir + 2.4 * data.red + 1)
+    data["evi2"] = evi2.clip(0, 1)
 
     if drop:
         data = data.drop_vars(["red", "nir"])
