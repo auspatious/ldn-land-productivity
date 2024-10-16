@@ -9,6 +9,7 @@ authors = [{ name = "Alex Leith", email = "alex@auspatious.com" }]
 keywords = ["land-degradation", "land-productivity", "ldn", "stac", "datacube"]
 
 dependencies = [
+    "bokeh",
     "boto3",
     "bottleneck",
     "dask",

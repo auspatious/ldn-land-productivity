@@ -52,8 +52,8 @@ class LDNPRocessor:
 
     dask_config = {
         "n_workers": 4,
-        "threads_per_worker": 8,
-        "memory_limit": "16GB",
+        "threads_per_worker": 32,
+        "memory_limit": "80GB",
     }
 
     dask_chunks = {"x": 2501, "y": 2501, "time": 1}
@@ -67,6 +67,8 @@ class LDNPRocessor:
         dask_config: dict | None = None,
         dask_chunks: dict | None = None,
         overwrite: bool = False,
+        configure_s3: bool = True,
+        configure_s3_options: dict = {"cloud_defaults": True, "requester_pays": True},
         version: str = "0.0.0",
         *args,
         **kwargs,
@@ -90,7 +92,8 @@ class LDNPRocessor:
         self._configure_logging()
 
         # Configure the S3 read access and performance settings
-        configure_s3_access(cloud_defaults=True, requester_pays=True)
+        if configure_s3:
+            configure_s3_access(**configure_s3_options)
 
     def _configure_logging(self) -> Logger:
         """Set up a simple logger"""
@@ -138,6 +141,10 @@ class LDNPRocessor:
 
         return "/".join(parts)
 
+    @property
+    def stac_key(self):
+        return self.key(None, "stac-item.json")
+
     def key(self, var: str | None, ext: str = "tif"):
         name = self.tile_id if var is None else f"{self.tile_id}_{var}"
         return f"{self.path}/{name}.{ext}"
@@ -172,7 +179,7 @@ class LDNPRocessor:
 
     def stac_exists(self):
         client = boto3.client("s3")
-        return self.s3_exists(self.bucket, self.key(None, "stac-item.json"), client)
+        return self.s3_exists(self.bucket, self.stac_key, client)
 
     def get_stac_item(self):
         assets = {}
@@ -186,7 +193,7 @@ class LDNPRocessor:
                 media_type="image/tiff; application=geotiff; profile=cloud-optimized",
                 href=href,
                 roles=["data"],
-                extra_fields=raster_info
+                extra_fields=raster_info,
             )
 
         # Get the first asset href
@@ -202,7 +209,7 @@ class LDNPRocessor:
             with_raster=True,
         )
 
-        item.set_self_href(f"https://{self.bucket}/{self.key(None, 'stac-item.json')}")
+        item.set_self_href(f"https://{self.bucket}/{self.stac_key}")
 
         self.item = item
 
@@ -266,6 +273,7 @@ class LDNPRocessor:
         monthly = indices.resample(time="1ME").max()
 
         # Load data into memory here
+        self.log.info(f"Processing with dask config: {self.dask_config}")
         with config.set(
             {
                 "dataframe.shuffle.method": "p2p",
@@ -282,11 +290,14 @@ class LDNPRocessor:
                     .interpolate_na("time", method="linear")
                     .bfill("time")
                     .ffill("time")
-                ).compute()
+                )
+                
+                self.log.info("Loading into memory...")
+                loaded = filled.compute()
 
                 self.log.info("Computing the integral...")
-                # Select just the year we are interested in and compute the integral
-                self.results = filled.sel(time=f"{self.year}").integrate(
+                # Select just the twelve months we are interested in and compute the integral
+                self.results = loaded.sel(time=f"{self.year}").integrate(
                     "time", datetime_unit="D"
                 )
 
@@ -307,7 +318,7 @@ class LDNPRocessor:
         s3 = boto3.client("s3")
 
         # Check if we're already done
-        if not overwrite and self.s3_exists(self.bucket, self.key(None, "stac-item.json"), s3):
+        if not overwrite and self.s3_exists(self.bucket, self.stac_key, s3):
             self.log.info("Skipping this tile as it already exists")
             return
 
@@ -334,7 +345,7 @@ class LDNPRocessor:
 
         # Write the STAC document
         stac_item_json = json.dumps(item.to_dict(), indent=4)
-        self.s3_dump(stac_item_json, self.key(None, "stac-item.json"), s3, content_type="application/json")
+        self.s3_dump(stac_item_json, self.stac_key, s3, content_type="application/json")
 
         self.log.info(f"Finished writing STAC to {self.item.self_href}")
         self.written.append(("STAC", self.item.self_href))
@@ -352,4 +363,6 @@ class LDNPRocessor:
             self.transform()
             self.write()
 
-        self.log.info(f"Finished full run, STAC is at: {self.item.self_href}")
+        self.log.info(
+            f"Finished full run, STAC is at: https://{self.bucket}/{self.stac_key}"
+        )

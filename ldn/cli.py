@@ -1,11 +1,10 @@
 import os
 from typing import Tuple
 
-from ldn.utils import get_tile_index
-
 import typer
 
 from ldn.processor import LDNPRocessor
+from ldn.utils import get_tile_index, get_tiles
 
 app = typer.Typer()
 
@@ -26,8 +25,8 @@ def run(
     bucket: str = "data.ldn.auspatious.com",
     bucket_path: str | None = None,
     n_workers: int = 4,
-    threads_per_worker: int = 16,
-    memory_limit: str = "40GB",
+    threads_per_worker: int = 32,
+    memory_limit: str = "80GB",
     lon_lat_chunks: int = 1250,
     overwrite: bool = False,
     version: str = "0.0.1",
@@ -38,10 +37,16 @@ def run(
         typer.echo(f"AWS_BATCH_JOB_ARRAY_INDEX: {aws_job_id}")
         if aws_job_id is None:
             raise typer.BadParameter(
-                "Tile must be provided as an argument or via the AWS_BATCH_JOB_ID environment variable"
+                "Tile must be provided as an argument or via the AWS_BATCH_JOB_ARRAY_INDEX environment variable"
             )
-
-        tile = get_tile_index(int(aws_job_id))
+        try:
+            tile = get_tile_index(int(aws_job_id))
+        except ValueError:
+            typer.echo(
+                f"Invalid AWS_BATCH_JOB_ARRAY_INDEX: {aws_job_id} is outside range 0-{len(get_tiles)}"
+            )
+            # Exit with success
+            raise typer.Exit(0)
 
     dask_config = {
         "n_workers": n_workers,
