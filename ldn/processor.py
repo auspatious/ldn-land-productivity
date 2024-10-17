@@ -30,7 +30,7 @@ from ldn.utils import (
 )
 
 
-class LDNPRocessor:
+class LDNProcessor:
     log = None
     overwrite: bool = False
 

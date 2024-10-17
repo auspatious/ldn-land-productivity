@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Tuple
 
+import boto3
 import geopandas as gpd
 import numpy as np
 from odc.geo import Geometry
@@ -8,6 +9,7 @@ from odc.geo.geobox import GeoBox, GeoboxTiles
 from xarray import Dataset
 
 from affine import Affine
+from typing import Dict, Any
 
 WGS84GRID10 = GeoboxTiles(
     GeoBox(
@@ -108,3 +110,56 @@ def create_land_productivity_indices(data: Dataset, drop: bool = True) -> Datase
         data = data.drop_vars(["red", "nir"])
 
     return data
+
+
+# Submit a batch job
+def submit_job(
+    job_name: str,
+    job_queue: str,
+    job_definition: str,
+    container_overrides: Dict[str, Any],
+    parameters: Dict[str, str],
+    multi: bool = False,
+    multi_size: int = 30,  # This is how many tiles there are in each year
+) -> str:
+    """Submit a job to AWS Batch"""
+    client = boto3.client("batch")
+    extras = {}
+    if multi:
+        extras["arrayProperties"] = {"size": multi_size}
+
+    response = client.submit_job(
+        jobName=job_name,
+        jobQueue=job_queue,
+        jobDefinition=job_definition,
+        containerOverrides=container_overrides,
+        parameters=parameters,
+        schedulingPriorityOverride=99,
+        shareIdentifier="alex",
+        retryStrategy={"attempts": 1},
+        **extras,
+    )
+    return response["jobId"]
+
+
+# Get the status of a job
+def get_job_status(job_id: str) -> str:
+    """Get the status of a job"""
+    client = boto3.client("batch")
+    response = client.describe_jobs(jobs=[job_id])
+    return response["jobs"][0]["status"]
+
+
+def get_cloudwatch_logs(job_id: str, log_group_name: str ="/aws/batch/auspatious-ldn") -> Dict[str, Any]:
+    """Get the logs for a job"""
+    client = boto3.client("batch")
+    response = client.describe_jobs(jobs=[job_id])
+    log_stream_name = response["jobs"][0]["container"]["logStreamName"]
+
+    logs_client = boto3.client("logs")
+
+    response = logs_client.get_log_events(
+        logGroupName=log_group_name, logStreamName=log_stream_name, startFromHead=True
+    )
+
+    return response["events"]

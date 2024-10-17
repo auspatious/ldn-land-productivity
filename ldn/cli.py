@@ -3,7 +3,7 @@ from typing import Tuple
 
 import typer
 
-from ldn.processor import LDNPRocessor
+from ldn.processor import LDNProcessor
 from ldn.utils import get_tile_index, get_tiles
 
 app = typer.Typer()
@@ -59,7 +59,7 @@ def run(
         "time": -1,
     }
 
-    proc = LDNPRocessor(
+    proc = LDNProcessor(
         tile=tile,
         year=year,
         bucket=bucket,
