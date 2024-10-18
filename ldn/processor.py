@@ -45,7 +45,7 @@ class LDNProcessor:
     data: Dataset = None
     results: Dataset = None
 
-    collection: str = "geo-ls-lp"
+    collection: str = "geo-ls-lpd"
     item: Item = None
     version: str = None
     written: List[Tuple[str, str]] = []
@@ -134,9 +134,9 @@ class LDNProcessor:
         parts = parts + [
             self.collection.replace("-", "_"),
             self.version.replace(".", "_"),
+            str(self.year),
             f"{self.tile[0]:03}",
             f"{self.tile[1]:03}",
-            str(self.year),
         ]
 
         return "/".join(parts)
@@ -355,13 +355,17 @@ class LDNProcessor:
     def run(self, decimated=False):
         self.log.info("Starting full run...")
 
-        if not self.overwrite and self.stac_exists():
-            self.log.info("STAC item already exists")
-        else:
-            self.find()
-            self.load(decimated=decimated)
-            self.transform()
-            self.write()
+        if self.stac_exists():
+            if self.overwrite:
+                self.log.warning("STAC Item already exists, but overwrite is set to True")
+            else:
+                self.log.info(f"STAC Item already exists at at: https://{self.bucket}/{self.stac_key}")
+                return
+
+        self.find()
+        self.load(decimated=decimated)
+        self.transform()
+        self.write()
 
         self.log.info(
             f"Finished full run, STAC is at: https://{self.bucket}/{self.stac_key}"

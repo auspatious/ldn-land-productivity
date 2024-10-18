@@ -1,15 +1,14 @@
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Dict, Tuple
 
 import boto3
 import geopandas as gpd
 import numpy as np
+from affine import Affine
 from odc.geo import Geometry
 from odc.geo.geobox import GeoBox, GeoboxTiles
+from s3fs import S3FileSystem
 from xarray import Dataset
-
-from affine import Affine
-from typing import Dict, Any
 
 WGS84GRID10 = GeoboxTiles(
     GeoBox(
@@ -35,15 +34,9 @@ def get_tiles(grid=WGS84GRID30) -> list[Tuple[Tuple[int, int], GeoBox]]:
     gdf = gpd.read_file(this_folder / "aois.geojson")
 
     # 0 is Fiji, 1 is Caribbean and 2 is Belize
-    fiji = list(
-        grid.tiles(Geometry(gdf.geometry[0], crs="epsg:4326"))
-    )
-    carb = list(
-        grid.tiles(Geometry(gdf.geometry[1], crs="epsg:4326"))
-    )
-    belz = list(
-        grid.tiles(Geometry(gdf.geometry[2], crs="epsg:4326"))
-    )
+    fiji = list(grid.tiles(Geometry(gdf.geometry[0], crs="epsg:4326")))
+    carb = list(grid.tiles(Geometry(gdf.geometry[1], crs="epsg:4326")))
+    belz = list(grid.tiles(Geometry(gdf.geometry[2], crs="epsg:4326")))
 
     # This is all the tiles
     tiles = fiji + carb + belz
@@ -150,7 +143,9 @@ def get_job_status(job_id: str) -> str:
     return response["jobs"][0]["status"]
 
 
-def get_cloudwatch_logs(job_id: str, log_group_name: str ="/aws/batch/auspatious-ldn") -> Dict[str, Any]:
+def get_cloudwatch_logs(
+    job_id: str, log_group_name: str = "/aws/batch/auspatious-ldn"
+) -> Dict[str, Any]:
     """Get the logs for a job"""
     client = boto3.client("batch")
     response = client.describe_jobs(jobs=[job_id])
@@ -163,3 +158,63 @@ def get_cloudwatch_logs(job_id: str, log_group_name: str ="/aws/batch/auspatious
     )
 
     return response["events"]
+
+
+def execute(year: int, tile: tuple[int, int] = None):
+    """Submit one or a set of jobs to AWS Batch"""
+    extra_params = []
+    if tile is not None:
+        multi = False
+        extra_params = ["--tile", ",".join([str(t) for t in tile])]
+
+    job_name = f"version-0-1-0-{year}"
+    job_queue = "normalQueue"
+    job_definition = "auspatious-ldn"
+    container_overrides = {
+        "command": [
+            "ldn-processor",
+            "--year",
+            "Ref::year",
+            "--version",
+            "Ref::version",
+            "--n-workers",
+            "Ref::n_workers",
+            "--threads-per-worker",
+            "Ref::threads_per_worker",
+            "--memory-limit",
+            "Ref::memory_limit",
+            "Ref::overwrite",
+            *extra_params,
+        ],
+        "vcpus": 16,
+        "memory": 122880,
+    }
+    parameters = {
+        "tile": "238,47",
+        "year": f"{year}",
+        "version": "0.1.0",
+        "n_workers": "4",
+        "threads_per_worker": "32",
+        "memory_limit": "100GB",
+        "overwrite": "--no-overwrite",
+    }
+
+    job_id = submit_job(
+        job_name,
+        job_queue,
+        job_definition,
+        container_overrides,
+        parameters,
+        multi=multi,
+    )
+    return job_id
+
+
+def get_s3_keys(version: str = "0.1.0") -> list[str]:
+    """Get all the STAC keys for a version"""
+    path = f"s3://data.ldn.auspatious.com/geo_ls_lp/{version.replace('.', '_')}/**/*.stac-item.json"
+
+    fs = S3FileSystem(anon=True)
+    stac_keys = fs.glob(path)
+
+    return stac_keys
