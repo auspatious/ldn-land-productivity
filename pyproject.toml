@@ -24,6 +24,7 @@ dependencies = [
     "pystac",
     "pystac-client",
     "rio-stac",
+    "s3fs",
     "scipy",
     "typer"
 ]
