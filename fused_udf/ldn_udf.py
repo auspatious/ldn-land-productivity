@@ -7,8 +7,6 @@ def udf(
     import palettable
     from pystac import Item
     import utils
-    from xarray import Dataset
-    import numpy as np
 
     # Fixed list of tiles until stacrs is available
     tiles = [
@@ -54,7 +52,11 @@ def udf(
         items.append(Item.from_file(url))
 
     # Calculate the resolution based on zoom level.
-    resolution = int(20 * 2 ** (13 - bbox.z[0]))
+    power = (13 - bbox.z[0])
+    if power < 0:
+        resolution = 30
+    else:
+        resolution = int(20 * 2 ** power)
 
     # Load the data into an XArray dataset
     data: Dataset = odc.stac.load(
@@ -66,7 +68,7 @@ def udf(
     ).squeeze()
 
     # Create a mask where data is nan
-    mask: DataArray = (~data.evi2.isnull()).squeeze().to_numpy()
+    mask = (~data.evi2.isnull()).squeeze().to_numpy()
 
     # Visualize that data as an RGB image.
     rgb_image = utils.visualize(
