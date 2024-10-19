@@ -8,6 +8,7 @@ def udf(
     from pystac import Item
     import utils
     from xarray import Dataset
+    import numpy as np
 
     # Fixed list of tiles until stacrs is available
     tiles = [
@@ -63,10 +64,14 @@ def udf(
         resolution=resolution,
         bbox=bbox.total_bounds,
     ).squeeze()
-    
+
+    # Create a mask where data is nan
+    mask: DataArray = (~data.evi2.isnull()).squeeze().to_numpy()
+
     # Visualize that data as an RGB image.
     rgb_image = utils.visualize(
         data=data[variable],
+        mask=mask,
         min=0,
         max=360,
         colormap=palettable.matplotlib.Viridis_20,
