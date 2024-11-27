@@ -22,9 +22,6 @@ RUN sh /uv-installer.sh && rm /uv-installer.sh
 # Ensure the installed binary is on the `PATH`
 ENV PATH="/root/.cargo/bin/:$PATH"
 
-# Copy from the cache instead of linking since it's a mounted volume
-ENV UV_LINK_MODE=copy
-
 # Copy the current directory into the container
 ADD . /code/
 WORKDIR /code
